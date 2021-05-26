@@ -26,7 +26,9 @@ class VALR_API:
         self.fiat_currency_code = config['FIAT_CURRENCY_CODE']
         self.crypto_currency_code = config['CRYPTO_CURRENCY_CODE']
         self.no_of_levels = int(config['ICEBERG_LEVELS'])
-        self.level_step_perc = int(config['LEVEL_STEP_PERCENTAGE'])
+        self.level_step_perc = Decimal(config['LEVEL_STEP_PERCENTAGE'])
+        self.min_order_size = Decimal(config['MINIMUM_ORDER_SIZE'])
+        self.quantity_precision = int(config['QUANTITY_PRECISION'])
         self.logger = logger
 
     def __getattr__(self, name):
@@ -35,6 +37,9 @@ class VALR_API:
                 return self.make_request(name.upper(), *args, **kwargs)
             return method
         return object.__getattribute__(self, name)
+
+    def get_pair(self):
+        return self.crypto_currency_code + self.fiat_currency_code
 
     def get_headers(self, timestamp, signature):
         return {
@@ -60,8 +65,12 @@ class VALR_API:
             params=params,
             headers=headers,
         )
-        if resp.status_code != 200:
-            self.logger.error(resp.text)
+        if resp.status_code not in (200, 201, 202):
+            self.logger.error("{}{}", resp.status_code, resp.text)
+
+        if not resp.text and resp.status_code == 200:
+            return True
+
         return resp.json()
 
     def sign_request(self, timestamp, verb, path, body):
@@ -106,3 +115,50 @@ class VALR_API:
             self.logger.error(res.text)
 
         return res.json()
+
+    def get_all_open_order_ids(self, pair=None):
+        orders = self.get('orders/open')
+        if pair:
+            orders = [
+                order for order in orders
+                if order['currencyPair'] == pair
+            ]
+        return [
+            order['orderId']
+            for order in orders
+        ]
+
+    def close_order(self, pair, order_id):
+        payload = {
+            "pair": pair,
+            "orderId": order_id
+        }
+        res = self.delete('orders/order', data=payload)
+        return res
+
+    def place_buy_order(self, pair, price, quantity):
+        payload = {
+            "side": "BUY",
+            "quantity": str(quantity),
+            "price": str(price),
+            "pair": pair,
+        }
+        res = self.post(
+            'orders/limit',
+            data=payload
+        )
+        return res
+
+# curl --location --request POST 'https://api.valr.com/v1/orders/limit' \
+# --header 'Content-Type: application/json' \
+# --header 'X-VALR-API-KEY: yourApiKey' \
+# --header 'X-VALR-SIGNATURE: e6669da57358f6b838f83f5ea5118a9ec39f71ae9018b9e4a1e0690fd3361208a4b0be4c84966792f302b600a69cf82c257722774a44ac1850570cfedd6053c4' \
+# --header 'X-VALR-TIMESTAMP: 1560007630778' \
+# --data-raw '{
+#     "side": "SELL",
+#     "quantity": "0.100000",
+#     "price": "10000",
+#     "pair": "BTCZAR",
+#     "postOnly": true,
+#     "customerOrderId": "1235"
+# }'
