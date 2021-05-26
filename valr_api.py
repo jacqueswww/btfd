@@ -26,11 +26,11 @@ class VALR_API:
         self.fiat_currency_code = config['FIAT_CURRENCY_CODE']
         self.crypto_currency_code = config['CRYPTO_CURRENCY_CODE']
         self.no_of_levels = int(config['ICEBERG_LEVELS'])
+        self.level_step_perc = int(config['LEVEL_STEP_PERCENTAGE'])
         self.logger = logger
 
     def __getattr__(self, name):
         if name.upper() in self.VERBS:
-            print('found method')
             def method(*args, **kwargs):
                 return self.make_request(name.upper(), *args, **kwargs)
             return method
@@ -89,10 +89,20 @@ class VALR_API:
         )['total']
         return Decimal(total)
 
-    def get_daily_closes():
-        pass
+    def get_market_summary(self, pair):
+        res = self.get(f'public/{pair}/marketsummary')
+        return res
 
-# curl --location --request GET 'https://api.valr.com/v1/account/balances' \
-# --header 'X-VALR-API-KEY: yourApiKey' \
-# --header 'X-VALR-SIGNATURE: e6669da57358f6b838f83f5ea5118a9ec39f71ae9018b9e4a1e0690fd3361208a4b0be4c84966792f302b600a69cf82c257722774a44ac1850570cfedd6053c4' \
-# --header 'X-VALR-TIMESTAMP: 1560007630778'
+    def get_daily_ohlc(self, pair, from_dt, to_dt):
+        url = f'https://api.valr.com/{pair}/buckets'
+        params = {
+            'startTime': int(time.mktime(from_dt.timetuple())),
+            'endTime': int(time.mktime(to_dt.timetuple())),
+            'periodSeconds': 86400
+        }
+        res = requests.get(url, params=params)
+
+        if res.status_code != 200:
+            self.logger.error(res.text)
+
+        return res.json()
