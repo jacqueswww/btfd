@@ -1,0 +1,2 @@
+# btfd
+Buy Crypto Smarter
