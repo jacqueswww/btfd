@@ -1,9 +1,10 @@
 import configparser
 import datetime
+import math
 import re
+import signal
 import threading
 import time
-import math
 
 from decimal import Decimal
 
@@ -11,13 +12,17 @@ from loguru import logger
 from valr_api import VALR_API
 
 
+class Shutdown(Exception):
+    pass
+
+
 logger.add("btfd.log", rotation="1 day")
 
+shutdown_flag = threading.Event()
 
 BACKENDS = {
     'valr': VALR_API
 }
-
 td_re = re.compile(r'(^[0-9]+)([h|m|s|d])')
 unit_map = {
     's': 1,
@@ -33,9 +38,9 @@ def get_time_in_seconds(input_str):
     return int(num) * unit_map[unit]
 
 
-def calculate_position_sizing(balance, no_of_levels):
+def calculate_position_sizing(balance, no_of_levels, iceberg_multiple):
     # Double position size the lower you go.
-    levels = [2**i for i in range(no_of_levels)]
+    levels = [Decimal(iceberg_multiple)**i for i in range(no_of_levels)]
     total_position_weights = sum(levels)
     position_size = Decimal(balance) / total_position_weights
     return [i*position_size for i in levels]
@@ -44,9 +49,18 @@ def calculate_position_sizing(balance, no_of_levels):
 @logger.catch
 def run_strategy(strategy_name, strategy_config, backend):
     logger.info('Number of levels: {}', backend.no_of_levels)
+    sleep_duration_seconds = get_time_in_seconds(backend.sleep_duration)
+    last_run_ts = None
     pair = backend.get_pair()
 
-    while True:
+    while not shutdown_flag.is_set():
+
+        if last_run_ts is not None:
+            last_run_delta_s = time.time() - last_run_ts
+            if last_run_delta_s < sleep_duration_seconds:
+                time.sleep(1)
+                continue
+
         logger.info('({}) Closing All Open Positions', strategy_name)
         order_ids = backend.get_all_open_order_ids(pair)
         for order_id in order_ids:
@@ -54,8 +68,8 @@ def run_strategy(strategy_name, strategy_config, backend):
             logger.info('({}) {}', strategy_name, backend.close_order(pair, order_id))
 
         # ~~ Start Strategy
-        balance = round(backend.get_fiat_balance(), 2)
-        position_sizes = calculate_position_sizing(balance, backend.no_of_levels)
+        balance = round(backend.get_usable_fiat_balance(), 2)
+        position_sizes = calculate_position_sizing(balance, backend.no_of_levels, backend.iceberg_multiple)
         from_date = (datetime.datetime.now() - datetime.timedelta(days=8))
         to_date = datetime.datetime.now()
         history_ohlc = backend.get_daily_ohlc(pair, from_date, to_date)
@@ -90,7 +104,7 @@ def run_strategy(strategy_name, strategy_config, backend):
             quantity = math.floor(size/price * 10**backend.quantity_precision) / 10**backend.quantity_precision
             final_size = quantity * price
             if quantity < Decimal(backend.min_order_size):
-                logger.error('({}) Position {} @ {} too small, skipping.', strategy_name, quantity, price)
+                logger.error('({}) Position {} @ {} too small, skipping.', strategy_name, round(size/price, 6), price)
                 continue
 
             logger.info(
@@ -102,30 +116,46 @@ def run_strategy(strategy_name, strategy_config, backend):
                 size=final_size,
                 price=price
             )
+
             backend.place_buy_order(
                 pair=pair,
                 quantity=quantity,
                 price=price
             )
 
-        # import ipdb; ipdb.set_trace()
-        # for level in range(backend.no_of_levels):
-        #     logger.info('({}) {}', strategy_name, level)
+        last_run_ts = time.time()
 
-        time.sleep(
-            get_time_in_seconds(backend.sleep_duration)
-        )
+
+def sigterm_handler(signum, frame):
+    raise Shutdown()
 
 
 @logger.catch
 def main(config):
-    for strategy_name in config.sections():
-        backend_name = config.get(strategy_name, 'BACKEND')
-        if backend_name not in BACKENDS:
-            raise Exception('Invalid backend', backend_name)
-        backend_config = config[strategy_name]
-        backend = BACKENDS[backend_name](backend_config, logger)
-        run_strategy(strategy_name, config[strategy_name], backend)
+
+    signal.signal(signal.SIGTERM, sigterm_handler)
+    signal.signal(signal.SIGINT, sigterm_handler)
+
+    threads = []
+    try:
+        for strategy_name in config.sections():
+            backend_name = config.get(strategy_name, 'BACKEND')
+            if backend_name not in BACKENDS:
+                raise Exception('Invalid backend', backend_name)
+            backend_config = config[strategy_name]
+            backend = BACKENDS[backend_name](backend_config, logger)
+
+            t = threading.Thread(
+                target=run_strategy,
+                args=(strategy_name, config[strategy_name], backend)
+            )
+            threads.append(t)
+            t.start()
+            time.sleep(10)
+    except Shutdown:
+        shutdown_flag.set()
+        for t in threads:
+            t.join()
 
 
 if __name__ == '__main__':

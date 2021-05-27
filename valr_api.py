@@ -29,6 +29,8 @@ class VALR_API:
         self.level_step_perc = Decimal(config['LEVEL_STEP_PERCENTAGE'])
         self.min_order_size = Decimal(config['MINIMUM_ORDER_SIZE'])
         self.quantity_precision = int(config['QUANTITY_PRECISION'])
+        self.iceberg_multiple = Decimal(config['ICEBERG_MULTIPLE'])
+        self.balance_limit = Decimal(config['BALANCE_LIMIT'])
         self.logger = logger
 
     def __getattr__(self, name):
@@ -89,14 +91,14 @@ class VALR_API:
         ).hexdigest()
         return signature
 
-    def get_fiat_balance(self):
+    def get_usable_fiat_balance(self):
         balances = self.get('account/balances')
         total = next(
             account
             for account in balances
             if account['currency'] == self.fiat_currency_code
         )['total']
-        return Decimal(total)
+        return Decimal(total) * self.balance_limit
 
     def get_market_summary(self, pair):
         res = self.get(f'public/{pair}/marketsummary')
