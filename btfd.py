@@ -74,11 +74,12 @@ def run_strategy(strategy_name, strategy_config, backend):
         to_date = datetime.datetime.now()
         history_ohlc = backend.get_daily_ohlc(pair, from_date, to_date)
         market_summary = backend.get_market_summary(pair)
+        last_traded_price = Decimal(market_summary['lastTradedPrice'])
         history_ohlc.insert(0, {
             'startTime': market_summary['created'],
             'high': market_summary['highPrice'],
-            'close': market_summary['lastTradedPrice'],
-            'open': market_summary['lastTradedPrice'],
+            'close': last_traded_price,
+            'open':last_traded_price,
             'low': market_summary['lowPrice']
         })
 
@@ -86,11 +87,15 @@ def run_strategy(strategy_name, strategy_config, backend):
             (Decimal(day['high']) + Decimal(day['low']) + Decimal(day['close']) + Decimal(day['open'])) / 4
             for day in history_ohlc]) / len(history_ohlc
         )
+
         avg_ohlc_price = round(avg_ohlc_price)
+
+        if avg_ohlc_price >= last_traded_price:
+            avg_ohlc_price = round(Decimal('0.99') * last_traded_price)
 
         logger.info('({}) Current Balance: {}', strategy_name, balance)
         # logger.info('({}) Position Sizes: {}', strategy_name, position_sizes)
-        logger.info('({}) Average Daily Price: {}', strategy_name, avg_ohlc_price)
+        logger.info('({}) Base Price: {}', strategy_name, avg_ohlc_price)
 
         step_value = math.floor(avg_ohlc_price * (Decimal(backend.level_step_perc) / 100))
         positions = [
