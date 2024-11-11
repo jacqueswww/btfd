@@ -92,7 +92,7 @@ class LUNO_API:
             for x in res['balance']
             if x['asset'] == self.fiat_currency_code
         )
-        return Decimal(fiat_info['balance']) - Decimal(fiat_info['reserved'])
+        return self.balance_limit * Decimal(fiat_info['balance']) - Decimal(fiat_info['reserved'])
 
     def get_daily_ohlc(self, pair, from_dt, to_dt):
         params = {
