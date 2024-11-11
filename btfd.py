@@ -10,7 +10,7 @@ from decimal import Decimal
 
 from loguru import logger
 from valr_api import VALR_API
-
+from luno_api import LUNO_API
 
 class Shutdown(Exception):
     pass
@@ -21,7 +21,8 @@ logger.add("btfd.log", rotation="1 day")
 shutdown_flag = threading.Event()
 
 BACKENDS = {
-    'valr': VALR_API
+    'valr': VALR_API,
+    'luno': LUNO_API
 }
 td_re = re.compile(r'(^[0-9]+)([h|m|s|d])')
 unit_map = {
@@ -73,6 +74,7 @@ def run_strategy(strategy_name, strategy_config, backend):
         from_date = (datetime.datetime.now() - datetime.timedelta(days=8))
         to_date = datetime.datetime.now()
         history_ohlc = backend.get_daily_ohlc(pair, from_date, to_date)
+
         market_summary = backend.get_market_summary(pair)
         last_traded_price = Decimal(market_summary['lastTradedPrice'])
         history_ohlc.insert(0, {
